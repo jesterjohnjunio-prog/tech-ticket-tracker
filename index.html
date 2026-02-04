@@ -157,13 +157,15 @@
             color: #64748b;
         }
         
-        .error {
+        .error, .empty {
             text-align: center;
             padding: 60px 20px;
             color: #e53e3e;
+            border-radius: 10px;
+            margin: 20px;
         }
         
-        .error button {
+        .error button, .empty button {
             margin-top: 20px;
             background: #f87171;
             color: white;
@@ -171,6 +173,13 @@
             padding: 10px 20px;
             border-radius: 5px;
             cursor: pointer;
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+        }
+        
+        .empty button:hover {
+            background: #ef4444;
         }
     </style>
 </head>
@@ -211,7 +220,18 @@
                 <i class="fas fa-exclamation-triangle fa-2x"></i>
                 <h3>Unable to load tickets</h3>
                 <p id="errorMessage">Please check your connection and try again.</p>
-                <button onclick="loadTickets()">Try Again</button>
+                <button onclick="loadTickets()">
+                    <i class="fas fa-redo-alt"></i> Try Again
+                </button>
+            </div>
+            
+            <div id="empty" class="empty" style="display: none;">
+                <i class="fas fa-exclamation-triangle fa-2x"></i>
+                <h3>No tickets found in Active Tickets sheet</h3>
+                <p>The Active Tickets sheet is currently empty or has no valid ticket data.</p>
+                <button onclick="loadTickets()">
+                    <i class="fas fa-redo-alt"></i> Try Again
+                </button>
             </div>
             
             <table id="ticketsTable" style="display: none;">
@@ -234,11 +254,18 @@
         async function loadTickets() {
             const loading = document.getElementById('loading');
             const error = document.getElementById('error');
+            const empty = document.getElementById('empty');
             const table = document.getElementById('ticketsTable');
             
             loading.style.display = 'block';
             error.style.display = 'none';
+            empty.style.display = 'none';
             table.style.display = 'none';
+            
+            // Reset stats
+            document.getElementById('totalTickets').textContent = '0';
+            document.getElementById('todayTickets').textContent = '0';
+            document.getElementById('uniquePersonnel').textContent = '0';
             
             try {
                 // Use CSV export from the Google Sheet
@@ -252,55 +279,88 @@
                 }
                 
                 const csvText = await response.text();
+                console.log('CSV response length:', csvText.length);
                 
-                // Parse CSV - with improved CSV parsing for Google Sheets format
+                // Check if CSV is empty or just headers
+                if (!csvText.trim() || csvText.trim().split('\n').length <= 1) {
+                    console.log('Empty CSV or only headers found');
+                    loading.style.display = 'none';
+                    empty.style.display = 'block';
+                    return;
+                }
+                
+                // Parse CSV
                 const rows = parseCSV(csvText);
+                console.log('Parsed rows:', rows.length);
+                
+                // Check if we have valid headers (expected columns)
+                if (rows.length === 0 || rows[0].length < 3) {
+                    throw new Error('Invalid CSV format - missing headers or columns');
+                }
+                
+                // Process tickets
                 const tickets = [];
+                const headers = rows[0].map(h => h.trim());
                 
-                console.log('Total rows found:', rows.length);
+                // Find the column indices for expected fields
+                const ticketIdIndex = headers.findIndex(h => h.toLowerCase().includes('ticket') && h.toLowerCase().includes('id'));
+                const dateIndex = headers.findIndex(h => h.toLowerCase().includes('date'));
+                const nameIndex = headers.findIndex(h => h.toLowerCase().includes('name') || h.toLowerCase().includes('talent'));
+                const assistanceIndex = headers.findIndex(h => h.toLowerCase().includes('assistance') || h.toLowerCase().includes('problem'));
+                const descIndex = headers.findIndex(h => h.toLowerCase().includes('description') || h.toLowerCase().includes('details'));
+                const personnelIndex = headers.findIndex(h => h.toLowerCase().includes('personnel') || h.toLowerCase().includes('mis'));
                 
-                // Process each row (skip header row)
+                console.log('Column indices:', {
+                    ticketIdIndex,
+                    dateIndex,
+                    nameIndex,
+                    assistanceIndex,
+                    descIndex,
+                    personnelIndex
+                });
+                
+                // Process data rows (skip header)
                 for (let i = 1; i < rows.length; i++) {
-                    const cols = rows[i];
+                    const row = rows[i];
                     
-                    // Check if we have enough columns
-                    if (cols.length >= 6) {
-                        const ticket = {
-                            'Ticket ID': cols[0] || '', // Column A
-                            'Date': cols[1] || '', // Column B
-                            'Talent Name': cols[2] || '', // Column C
-                            'Assistance Needed': cols[3] || '', // Column D
-                            'Description': cols[4] || '', // Column E
-                            'Preferred MIS Personnel': cols[5] || 'Unassigned' // Column F
-                        };
-                        
-                        // Only add if we have at least some data
-                        if (ticket['Ticket ID'].trim() !== '' || ticket['Talent Name'].trim() !== '') {
-                            tickets.push(ticket);
-                        }
-                    } else if (cols.length > 0) {
-                        console.log(`Row ${i} has only ${cols.length} columns:`, cols);
+                    // Skip completely empty rows
+                    if (row.every(cell => !cell || cell.trim() === '')) {
+                        continue;
+                    }
+                    
+                    const ticket = {
+                        'Ticket ID': ticketIdIndex >= 0 ? (row[ticketIdIndex] || '').trim() : `TC-${i}`,
+                        'Date': dateIndex >= 0 ? (row[dateIndex] || '').trim() : '',
+                        'Talent Name': nameIndex >= 0 ? (row[nameIndex] || '').trim() : '',
+                        'Assistance Needed': assistanceIndex >= 0 ? (row[assistanceIndex] || '').trim() : 'Not specified',
+                        'Description': descIndex >= 0 ? (row[descIndex] || '').trim() : '',
+                        'Preferred MIS Personnel': personnelIndex >= 0 ? (row[personnelIndex] || '').trim() || 'Unassigned' : 'Unassigned'
+                    };
+                    
+                    // Only add if we have at least a ticket ID or talent name
+                    if (ticket['Ticket ID'] || ticket['Talent Name']) {
+                        tickets.push(ticket);
                     }
                 }
                 
-                console.log('Loaded', tickets.length, 'tickets from Google Sheet');
+                console.log('Loaded tickets:', tickets.length);
                 
-                if (tickets.length > 0) {
+                if (tickets.length === 0) {
+                    // Show empty state
+                    loading.style.display = 'none';
+                    empty.style.display = 'block';
+                    console.log('No valid tickets found in the sheet');
+                } else {
+                    // Display tickets
                     displayTickets(tickets);
                     updateStats(tickets);
-                } else {
-                    // Test with sample data if no tickets found
-                    console.log('No tickets loaded. Testing with sample data...');
-                    const sampleTickets = createSampleTickets();
-                    displayTickets(sampleTickets);
-                    updateStats(sampleTickets);
                 }
                 
             } catch (err) {
-                console.error('Error:', err);
+                console.error('Error loading tickets:', err);
                 document.getElementById('errorMessage').textContent = `Error: ${err.message}. Please ensure the Google Sheet is published to web.`;
-                error.style.display = 'block';
                 loading.style.display = 'none';
+                error.style.display = 'block';
             }
         }
         
@@ -324,17 +384,17 @@
                     }
                 } else if (char === ',' && !inQuotes) {
                     // End of value
-                    currentRow.push(currentValue);
+                    currentRow.push(currentValue.trim());
                     currentValue = '';
                 } else if (char === '\n' && !inQuotes) {
                     // End of row
-                    currentRow.push(currentValue);
+                    currentRow.push(currentValue.trim());
                     rows.push(currentRow);
                     currentRow = [];
                     currentValue = '';
                 } else if (char === '\r' && nextChar === '\n' && !inQuotes) {
                     // Handle Windows line endings
-                    currentRow.push(currentValue);
+                    currentRow.push(currentValue.trim());
                     rows.push(currentRow);
                     currentRow = [];
                     currentValue = '';
@@ -345,41 +405,12 @@
             }
             
             // Add the last row if there's any data
-            if (currentValue !== '' || currentRow.length > 0) {
-                currentRow.push(currentValue);
+            if (currentValue.trim() !== '' || currentRow.length > 0) {
+                currentRow.push(currentValue.trim());
                 rows.push(currentRow);
             }
             
             return rows;
-        }
-        
-        function createSampleTickets() {
-            return [
-                {
-                    'Ticket ID': 'TC-20240115-001',
-                    'Date': '2024-01-15 09:30:00',
-                    'Talent Name': 'John Smith',
-                    'Assistance Needed': 'Software Installation',
-                    'Description': 'Need Adobe Creative Cloud installed on workstation',
-                    'Preferred MIS Personnel': 'Alex Johnson'
-                },
-                {
-                    'Ticket ID': 'TC-20240115-002',
-                    'Date': '2024-01-15 10:15:00',
-                    'Talent Name': 'Maria Garcia',
-                    'Assistance Needed': 'Network Connectivity',
-                    'Description': 'Cannot connect to corporate WiFi',
-                    'Preferred MIS Personnel': 'Sam Wilson'
-                },
-                {
-                    'Ticket ID': 'TC-20240115-003',
-                    'Date': '2024-01-15 11:45:00',
-                    'Talent Name': 'David Chen',
-                    'Assistance Needed': 'Hardware Issue',
-                    'Description': 'Laptop keyboard not functioning properly',
-                    'Preferred MIS Personnel': 'Taylor Kim'
-                }
-            ];
         }
         
         function displayTickets(tickets) {
@@ -392,21 +423,25 @@
             tickets.forEach(ticket => {
                 const row = document.createElement('tr');
                 
-                // Format date - handle various date formats
+                // Format date
                 let date = ticket.Date;
-                try {
-                    const dateObj = new Date(ticket.Date);
-                    if (!isNaN(dateObj.getTime())) {
-                        date = dateObj.toLocaleDateString('en-US', {
-                            year: 'numeric',
-                            month: 'short',
-                            day: 'numeric',
-                            hour: '2-digit',
-                            minute: '2-digit'
-                        });
+                if (date) {
+                    try {
+                        const dateObj = new Date(date);
+                        if (!isNaN(dateObj.getTime())) {
+                            date = dateObj.toLocaleDateString('en-US', {
+                                year: 'numeric',
+                                month: 'short',
+                                day: 'numeric',
+                                hour: '2-digit',
+                                minute: '2-digit'
+                            });
+                        }
+                    } catch (e) {
+                        // Use original date if parsing fails
                     }
-                } catch (e) {
-                    // If date parsing fails, use original value
+                } else {
+                    date = 'N/A';
                 }
                 
                 row.innerHTML = `
@@ -435,18 +470,27 @@
         function updateStats(tickets) {
             document.getElementById('totalTickets').textContent = tickets.length;
             
+            // Count today's tickets
             const today = new Date().toISOString().split('T')[0];
             const todayTickets = tickets.filter(t => {
+                if (!t.Date) return false;
                 try {
-                    const ticketDate = new Date(t.Date).toISOString().split('T')[0];
-                    return ticketDate === today;
+                    const ticketDate = new Date(t.Date);
+                    if (isNaN(ticketDate.getTime())) return false;
+                    const ticketDateStr = ticketDate.toISOString().split('T')[0];
+                    return ticketDateStr === today;
                 } catch (e) {
                     return false;
                 }
             }).length;
             document.getElementById('todayTickets').textContent = todayTickets;
             
-            const personnel = [...new Set(tickets.map(t => t['Preferred MIS Personnel']).filter(Boolean))];
+            // Count unique personnel (excluding 'Unassigned')
+            const personnel = [...new Set(
+                tickets
+                    .map(t => t['Preferred MIS Personnel'])
+                    .filter(p => p && p.toLowerCase() !== 'unassigned')
+            )];
             document.getElementById('uniquePersonnel').textContent = personnel.length;
         }
         
